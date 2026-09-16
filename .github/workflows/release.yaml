@@ -49,10 +49,90 @@ jobs:
             dart compile exe bin/pm.dart -o dist/pm-${{ matrix.target }}
           fi
 
-      - uses: actions/upload-artifact@v4
+      - name: Build Linux installer
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p installer/payload
+          cp dist/pc-${{ matrix.target }} installer/payload/pc
+          cp dist/pm-${{ matrix.target }} installer/payload/pm
+          chmod +x installer/payload/pc installer/payload/pm
+
+          cat > installer/install.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          PREFIX="${PREFIX:-/usr/local/bin}"
+          echo "Installing pscm (pc, pm) to $PREFIX ..."
+          if [ ! -w "$PREFIX" ]; then
+            echo "Need elevated permissions to write to $PREFIX, re-run with sudo if this fails."
+          fi
+          mkdir -p "$PREFIX"
+          install -m 755 "$(dirname "$0")/pc" "$PREFIX/pc"
+          install -m 755 "$(dirname "$0")/pm" "$PREFIX/pm"
+          echo "Installed pc and pm to $PREFIX"
+          echo "Run 'sudo pc --install-completion' to install shell completions."
+          EOF
+          chmod +x installer/install.sh
+
+          tar -C installer -czf pscm-${{ matrix.target }}-installer.tar.gz install.sh payload
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+          Copy-Item dist/pc-${{ matrix.target }}.exe installer/pc.exe
+          Copy-Item dist/pm-${{ matrix.target }}.exe installer/pm.exe
+
+          @"
+          [Setup]
+          AppName=pscm
+          AppVersion=${{ steps.version.outputs.version }}
+          DefaultDirName={autopf}\pscm
+          DefaultGroupName=pscm
+          OutputDir=dist
+          OutputBaseFilename=pscm-${{ matrix.target }}-installer
+          ArchitecturesInstallIn64BitMode=x64
+          Compression=lzma
+          SolidCompression=yes
+          ChangesEnvironment=yes
+
+          [Files]
+          Source: "installer\pc.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "installer\pm.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Registry]
+          Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
+            ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \
+            Check: NeedsAddPath('{app}')
+
+          [Code]
+          function NeedsAddPath(Param: string): boolean;
+          var
+            OrigPath: string;
+          begin
+            if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
+              'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+              'Path', OrigPath)
+            then begin
+              Result := True;
+              exit;
+            end;
+            Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+          end;
+          "@ | Out-File -FilePath installer.iss -Encoding ascii
+
+          iscc installer.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: pscm-${{ matrix.target }}
-          path: dist/*
+          name: pscm-${{ matrix.target }}-installer
+          path: |
+            dist/*-installer.exe
+            pscm-${{ matrix.target }}-installer.tar.gz
 
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -70,4 +150,6 @@ jobs:
         with:
           tag_name: v${{ needs.build.outputs.version }}
           name: v${{ needs.build.outputs.version }}
-          files: dist/*
+          files: |
+            dist/*-installer.exe
+            dist/*-installer.tar.gz
