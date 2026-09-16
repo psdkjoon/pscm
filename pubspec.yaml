@@ -1,0 +1,15 @@
+name: pscm
+description: psdk's smart copy and move CLI tool
+version: 1.0.0
+publish_to: none
+
+homepage: https://github.com/psdkjoon/pscm
+repository: https://github.com/psdkjoon/pscm
+issue_tracker: https://github.com/psdkjoon/pscm/issues
+
+environment:
+  sdk: ^3.5.0
+
+executables:
+  pc: pc
+  pm: pm

@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: windows-latest
+            target: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+
+      - run: dart pub get
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compile pc
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            dart compile exe bin/pc.dart -o dist/pc-${{ matrix.target }}.exe
+          else
+            dart compile exe bin/pc.dart -o dist/pc-${{ matrix.target }}
+          fi
+
+      - name: Compile pm
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            dart compile exe bin/pm.dart -o dist/pm-${{ matrix.target }}.exe
+          else
+            dart compile exe bin/pm.dart -o dist/pm-${{ matrix.target }}
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pscm-${{ matrix.target }}
+          path: dist/*
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: v${{ needs.build.outputs.version }}
+          files: dist/*
