@@ -151,5 +151,5 @@ jobs:
           tag_name: v${{ needs.build.outputs.version }}
           name: v${{ needs.build.outputs.version }}
           files: |
-            dist/*-installer.exe
+            dist/dist/*-installer.exe
             dist/*-installer.tar.gz
