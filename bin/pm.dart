@@ -37,7 +37,7 @@ Future<void> main(List<String> args) async {
     cliArgs.destinationPath,
   );
 
-  if (scanResult.tasks.isEmpty) {
+  if (scanResult.tasks.isEmpty && scanResult.directories.isEmpty) {
     stdout.writeln('Nothing to move.');
     return;
   }
@@ -49,12 +49,15 @@ Future<void> main(List<String> args) async {
 
   final List<CopyFailure> failures = await moveViaCopy(
     scanResult: scanResult,
-    sourcePath: cliArgs.sourcePath,
     progress: progress,
     concurrency: cliArgs.jobs,
   );
 
   progress.done();
+
+  for (final String path in scanResult.skipped) {
+    stdout.writeln('Skipped (not a regular file): $path');
+  }
 
   if (failures.isNotEmpty) {
     stdout.writeln('Completed with ${failures.length} error(s):');

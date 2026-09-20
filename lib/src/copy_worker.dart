@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'paths.dart';
-
+import 'permissions.dart';
 import 'scan.dart';
 
 class WorkerRequest {
@@ -53,6 +53,15 @@ Future<void> _copyFile(FileTask task, SendPort sendPort) async {
     destDir.createSync(recursive: true);
   }
 
+  final String? linkTarget = task.linkTarget;
+  if (linkTarget != null) {
+    _clearDestination(task.destinationPath, replaceFiles: true);
+    Link(task.destinationPath).createSync(linkTarget);
+    return;
+  }
+
+  _clearDestination(task.destinationPath, replaceFiles: false);
+
   final RandomAccessFile input = File(
     task.sourcePath,
   ).openSync(mode: FileMode.read);
@@ -73,4 +82,29 @@ Future<void> _copyFile(FileTask task, SendPort sendPort) async {
     input.closeSync();
     output.closeSync();
   }
+
+  _applyMetadata(task);
+}
+
+void _clearDestination(String path, {required bool replaceFiles}) {
+  final FileSystemEntityType type = FileSystemEntity.typeSync(
+    path,
+    followLinks: false,
+  );
+  if (type == FileSystemEntityType.link) {
+    Link(path).deleteSync();
+  } else if (replaceFiles && type == FileSystemEntityType.file) {
+    File(path).deleteSync();
+  }
+}
+
+void _applyMetadata(FileTask task) {
+  setPermissions(task.destinationPath, task.mode);
+  final DateTime? modified = task.modified;
+  if (modified == null) {
+    return;
+  }
+  try {
+    File(task.destinationPath).setLastModifiedSync(modified);
+  } on FileSystemException {}
 }

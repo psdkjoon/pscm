@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:pscm/src/cli_args.dart';
 import 'package:pscm/src/copy_pool.dart';
+import 'package:pscm/src/directories.dart';
 import 'package:pscm/src/progress.dart';
 import 'package:pscm/src/safety.dart';
 import 'package:pscm/src/scan.dart';
@@ -31,7 +32,7 @@ Future<void> main(List<String> args) async {
     cliArgs.destinationPath,
   );
 
-  if (scanResult.tasks.isEmpty) {
+  if (scanResult.tasks.isEmpty && scanResult.directories.isEmpty) {
     stdout.writeln('Nothing to copy.');
     return;
   }
@@ -41,13 +42,23 @@ Future<void> main(List<String> args) async {
     totalFiles: scanResult.tasks.length,
   );
 
+  final List<DirectoryTask> createdDirectories = createDirectories(
+    scanResult.directories,
+  );
+
   final List<CopyFailure> failures = await runParallelCopy(
     tasks: scanResult.tasks,
     progress: progress,
     concurrency: cliArgs.jobs,
   );
 
+  applyDirectoryModes(createdDirectories);
+
   progress.done();
+
+  for (final String path in scanResult.skipped) {
+    stdout.writeln('Skipped (not a regular file): $path');
+  }
 
   if (failures.isNotEmpty) {
     stdout.writeln('Completed with ${failures.length} error(s):');

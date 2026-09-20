@@ -52,10 +52,27 @@ CliArgs parseCliArgs(List<String> args, String toolName, String verb) {
       case '--help':
         stdout.writeln(_usage(toolName, verb));
         exit(0);
+      case '--completion':
+        i += 1;
+        if (i >= args.length) {
+          throw CliArgsException('Missing value for $arg');
+        }
+        final String? script = completionScript(args[i], toolName);
+        if (script == null) {
+          throw CliArgsException(
+            'Unknown shell: ${args[i]} (expected bash, zsh or fish)',
+          );
+        }
+        stdout.write(script);
+        exit(0);
       case '--install-completion':
-        final CompletionInstallResult result = installCompletions();
-        stdout.writeln(result.message);
-        exit(result.success ? 0 : 1);
+        final CompletionResult installResult = installCompletions();
+        stdout.writeln(installResult.message);
+        exit(installResult.success ? 0 : 1);
+      case '--uninstall-completion':
+        final CompletionResult uninstallResult = uninstallCompletions();
+        stdout.writeln(uninstallResult.message);
+        exit(uninstallResult.success ? 0 : 1);
       default:
         positional.add(arg);
     }
@@ -83,6 +100,8 @@ String _usage(String toolName, String verb) {
       '  -f, --force   overwrite destination if it already exists\n'
       '  -j, --jobs N  number of parallel workers (default: cpu count)\n'
       '  -h, --help    show this help\n'
-      '  --install-completion  install bash/zsh completion for pc and pm\n'
-      '                         (system-wide; re-run with sudo if needed)';
+      '  --completion SHELL      print completion script (bash, zsh, fish)\n'
+      '  --install-completion    install shell completion for pc and pm\n'
+      '                          (system-wide; re-run with sudo if needed)\n'
+      '  --uninstall-completion  remove the installed completion files';
 }
