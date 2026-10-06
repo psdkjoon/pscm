@@ -2,6 +2,13 @@ name: Release
 
 on:
   push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
@@ -22,6 +29,8 @@ jobs:
       - uses: dart-lang/setup-dart@v1
 
       - run: dart pub get
+
+      - run: dart analyze
 
       - name: Read version
         id: version
@@ -90,18 +99,39 @@ jobs:
             Check: NeedsAddPath('{app}')
 
           [Code]
+          const
+            EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
+
           function NeedsAddPath(Param: string): boolean;
           var
             OrigPath: string;
           begin
-            if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
-              'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
-              'Path', OrigPath)
-            then begin
+            if not RegQueryStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', OrigPath) then
+            begin
               Result := True;
               exit;
             end;
-            Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+            Result := Pos(';' + Uppercase(ExpandConstant(Param)) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
+          end;
+
+          procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+          var
+            Paths: string;
+            Entry: string;
+            P: Integer;
+          begin
+            if CurUninstallStep <> usPostUninstall then exit;
+            if not RegQueryStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths) then exit;
+            Entry := Uppercase(ExpandConstant('{app}'));
+            Paths := ';' + Paths + ';';
+            P := Pos(';' + Entry + ';', Uppercase(Paths));
+            if P = 0 then exit;
+            Delete(Paths, P, Length(Entry) + 1);
+            if Length(Paths) > 2 then
+              Paths := Copy(Paths, 2, Length(Paths) - 2)
+            else
+              Paths := '';
+            RegWriteExpandStringValue(HKEY_LOCAL_MACHINE, EnvironmentKey, 'Path', Paths);
           end;
           "@ | Out-File -FilePath installer.iss -Encoding ascii
 
@@ -118,17 +148,35 @@ jobs:
       version: ${{ steps.version.outputs.version }}
 
   release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Check for existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ needs.build.outputs.version }}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.existing.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - if: steps.existing.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: v${{ needs.build.outputs.version }}
+          generate_release_notes: true
           files: |
             dist/**/*-installer*

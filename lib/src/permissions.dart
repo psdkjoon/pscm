@@ -9,6 +9,8 @@ typedef _MallocNative = Pointer<Uint8> Function(IntPtr size);
 typedef _MallocDart = Pointer<Uint8> Function(int size);
 typedef _FreeNative = Void Function(Pointer<Uint8> pointer);
 typedef _FreeDart = void Function(Pointer<Uint8> pointer);
+typedef _SyncNative = Void Function();
+typedef _SyncDart = void Function();
 
 const int permissionMask = 511;
 
@@ -23,6 +25,8 @@ final _MallocDart _malloc = _libc.lookupFunction<_MallocNative, _MallocDart>(
 );
 
 final _FreeDart _free = _libc.lookupFunction<_FreeNative, _FreeDart>('free');
+
+final _SyncDart _sync = _libc.lookupFunction<_SyncNative, _SyncDart>('sync');
 
 bool setPermissions(String path, int mode) {
   if (!Platform.isLinux) {
@@ -41,4 +45,11 @@ bool setPermissions(String path, int mode) {
   } finally {
     _free(buffer);
   }
+}
+
+void flushFilesystems() {
+  if (!Platform.isLinux) {
+    return;
+  }
+  _sync();
 }

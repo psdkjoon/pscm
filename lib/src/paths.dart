@@ -1,45 +1,76 @@
 import 'dart:io';
 
-String pathSeparator() => Platform.isWindows ? '\\' : '/';
+bool get _windows => Platform.isWindows;
+
+String pathSeparator() => _windows ? '\\' : '/';
+
+bool isSeparator(String character) {
+  return character == '/' || (_windows && character == '\\');
+}
+
+bool endsWithSeparator(String path) {
+  return path.isNotEmpty && isSeparator(path[path.length - 1]);
+}
 
 String joinPaths(String a, String b) {
   if (a.isEmpty) {
     return b;
   }
-  final String sep = pathSeparator();
-  final bool aHasTrailing = a.endsWith(sep);
-  final bool bHasLeading = b.startsWith(sep);
-  if (aHasTrailing && bHasLeading) {
+  if (b.isEmpty) {
+    return a;
+  }
+  final bool aTrailing = endsWithSeparator(a);
+  final bool bLeading = isSeparator(b[0]);
+  if (aTrailing && bLeading) {
     return a + b.substring(1);
   }
-  if (!aHasTrailing && !bHasLeading) {
-    return a + sep + b;
+  if (!aTrailing && !bLeading) {
+    return a + pathSeparator() + b;
   }
   return a + b;
 }
 
-String dirName(String path) {
-  final String sep = pathSeparator();
-  String normalized = path;
-  while (normalized.length > 1 && normalized.endsWith(sep)) {
-    normalized = normalized.substring(0, normalized.length - 1);
+String _stripTrailingSeparators(String path) {
+  int end = path.length;
+  while (end > 1 && isSeparator(path[end - 1])) {
+    end -= 1;
   }
-  final int index = normalized.lastIndexOf(sep);
-  if (index <= 0) {
-    return index == 0 ? sep : '.';
-  }
-  return normalized.substring(0, index);
+  return path.substring(0, end);
 }
 
-String absolutePath(String path) {
-  if (_isAbsolute(path)) {
-    return normalizePath(path);
+int _lastSeparator(String path) {
+  final int slash = path.lastIndexOf('/');
+  if (!_windows) {
+    return slash;
   }
-  return normalizePath(joinPaths(Directory.current.path, path));
+  final int backslash = path.lastIndexOf('\\');
+  return slash > backslash ? slash : backslash;
+}
+
+String baseName(String path) {
+  final String stripped = _stripTrailingSeparators(path);
+  final int index = _lastSeparator(stripped);
+  return index < 0 ? stripped : stripped.substring(index + 1);
+}
+
+String dirName(String path) {
+  final String stripped = _stripTrailingSeparators(path);
+  final int index = _lastSeparator(stripped);
+  if (index < 0) {
+    return '.';
+  }
+  if (index == 0) {
+    return stripped.substring(0, 1);
+  }
+  final String parent = _stripTrailingSeparators(stripped.substring(0, index));
+  if (_windows && parent.length == 2 && parent[1] == ':') {
+    return parent + pathSeparator();
+  }
+  return parent;
 }
 
 bool _isAbsolute(String path) {
-  if (Platform.isWindows) {
+  if (_windows) {
     return path.length >= 2 && path[1] == ':';
   }
   return path.startsWith('/');
@@ -48,9 +79,15 @@ bool _isAbsolute(String path) {
 String normalizePath(String path) {
   final String sep = pathSeparator();
   final bool absolute = _isAbsolute(path);
-  final List<String> rawParts = path.split(RegExp(r'[\\/]'));
+  final List<String> parts = _windows
+      ? path.split(RegExp(r'[\\/]'))
+      : path.split('/');
+  String drive = '';
+  if (_windows && absolute) {
+    drive = parts.removeAt(0);
+  }
   final List<String> stack = <String>[];
-  for (final String part in rawParts) {
+  for (final String part in parts) {
     if (part.isEmpty || part == '.') {
       continue;
     }
@@ -66,49 +103,56 @@ String normalizePath(String path) {
   }
   final String joined = stack.join(sep);
   if (absolute) {
-    final String prefix = Platform.isWindows
-        ? path.substring(0, 2) + sep
-        : sep;
-    return prefix + joined;
+    return _windows ? '$drive$sep$joined' : '$sep$joined';
   }
   return joined.isEmpty ? '.' : joined;
 }
 
-String relativePath(String path, {required String from}) {
-  final String pathAbs = absolutePath(path);
-  final String fromAbs = absolutePath(from);
-  final String sep = pathSeparator();
-  final List<String> pathParts = pathAbs.split(sep)
-    ..removeWhere((String e) => e.isEmpty);
-  final List<String> fromParts = fromAbs.split(sep)
-    ..removeWhere((String e) => e.isEmpty);
+String absolutePath(String path) {
+  if (_isAbsolute(path)) {
+    return normalizePath(path);
+  }
+  return normalizePath(joinPaths(Directory.current.path, path));
+}
 
-  int common = 0;
-  while (common < pathParts.length &&
-      common < fromParts.length &&
-      pathParts[common] == fromParts[common]) {
-    common += 1;
+String canonicalPath(String path, {bool resolveLast = true}) {
+  final String absolute = absolutePath(path);
+  if (!resolveLast) {
+    final String parent = dirName(absolute);
+    if (parent == absolute) {
+      return absolute;
+    }
+    return joinPaths(canonicalPath(parent), baseName(absolute));
   }
 
-  final List<String> up = List<String>.filled(
-    fromParts.length - common,
-    '..',
-  );
-  final List<String> down = pathParts.sublist(common);
-  final List<String> result = <String>[...up, ...down];
-  return result.isEmpty ? '.' : result.join(sep);
+  String existing = absolute;
+  final List<String> missing = <String>[];
+  while (FileSystemEntity.typeSync(existing, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    final String parent = dirName(existing);
+    if (parent == existing || parent == '.') {
+      return absolute;
+    }
+    missing.insert(0, baseName(existing));
+    existing = parent;
+  }
+
+  String resolved;
+  try {
+    resolved = File(existing).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    return absolute;
+  }
+  for (final String part in missing) {
+    resolved = joinPaths(resolved, part);
+  }
+  return resolved;
 }
 
 bool isWithin(String parent, String child) {
   final String parentAbs = absolutePath(parent);
   final String childAbs = absolutePath(child);
   final String sep = pathSeparator();
-  final String parentWithSep = parentAbs.endsWith(sep)
-      ? parentAbs
-      : parentAbs + sep;
-  return childAbs != parentAbs && childAbs.startsWith(parentWithSep);
-}
-
-bool pathsEqual(String a, String b) {
-  return absolutePath(a) == absolutePath(b);
+  final String prefix = parentAbs.endsWith(sep) ? parentAbs : parentAbs + sep;
+  return childAbs != parentAbs && childAbs.startsWith(prefix);
 }

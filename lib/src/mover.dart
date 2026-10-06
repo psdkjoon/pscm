@@ -1,25 +1,42 @@
 import 'dart:io';
 
 import 'copy_pool.dart';
-import 'directories.dart';
 import 'paths.dart';
+import 'permissions.dart';
 import 'progress.dart';
 import 'scan.dart';
 
+const Set<int> _permissionErrors = <int>{1, 13, 30};
+
 bool tryRename(String sourcePath, String destinationPath) {
+  final FileSystemEntityType existing = FileSystemEntity.typeSync(
+    destinationPath,
+    followLinks: false,
+  );
+  if (existing == FileSystemEntityType.directory) {
+    return false;
+  }
   try {
     final Directory parent = Directory(dirName(destinationPath));
     if (!parent.existsSync()) {
       parent.createSync(recursive: true);
     }
-    final FileSystemEntityType type = FileSystemEntity.typeSync(sourcePath);
+    final FileSystemEntityType type = FileSystemEntity.typeSync(
+      sourcePath,
+      followLinks: false,
+    );
     if (type == FileSystemEntityType.directory) {
       Directory(sourcePath).renameSync(destinationPath);
+    } else if (type == FileSystemEntityType.link) {
+      Link(sourcePath).renameSync(destinationPath);
     } else {
       File(sourcePath).renameSync(destinationPath);
     }
     return true;
-  } on FileSystemException {
+  } on FileSystemException catch (e) {
+    if (Platform.isLinux && _permissionErrors.contains(e.osError?.errorCode)) {
+      rethrow;
+    }
     return false;
   }
 }
@@ -29,16 +46,11 @@ Future<List<CopyFailure>> moveViaCopy({
   required ProgressBar progress,
   required int concurrency,
 }) async {
-  final List<DirectoryTask> created = createDirectories(
-    scanResult.directories,
-  );
-  final List<CopyFailure> failures = await runParallelCopy(
-    tasks: scanResult.tasks,
+  final List<CopyFailure> failures = await copyScanResult(
+    scanResult: scanResult,
     progress: progress,
     concurrency: concurrency,
   );
-  applyDirectoryModes(created);
-
   if (failures.isNotEmpty) {
     return failures;
   }
@@ -48,6 +60,7 @@ Future<List<CopyFailure>> moveViaCopy({
     return failures;
   }
 
+  flushFilesystems();
   failures.addAll(_removeSource(scanResult));
   return failures;
 }
@@ -78,19 +91,23 @@ List<CopyFailure> _verify(ScanResult scanResult) {
 }
 
 bool _isCopied(FileTask task) {
-  final String? linkTarget = task.linkTarget;
-  if (linkTarget != null) {
-    final FileSystemEntityType type = FileSystemEntity.typeSync(
-      task.destinationPath,
-      followLinks: false,
-    );
-    return type == FileSystemEntityType.link &&
-        Link(task.destinationPath).targetSync() == linkTarget;
+  try {
+    final String? linkTarget = task.linkTarget;
+    if (linkTarget != null) {
+      final FileSystemEntityType type = FileSystemEntity.typeSync(
+        task.destinationPath,
+        followLinks: false,
+      );
+      return type == FileSystemEntityType.link &&
+          Link(task.destinationPath).targetSync() == linkTarget;
+    }
+    final File sourceFile = File(task.sourcePath);
+    final File destFile = File(task.destinationPath);
+    return destFile.existsSync() &&
+        destFile.lengthSync() == sourceFile.lengthSync();
+  } on FileSystemException {
+    return false;
   }
-  final File sourceFile = File(task.sourcePath);
-  final File destFile = File(task.destinationPath);
-  return destFile.existsSync() &&
-      destFile.lengthSync() == sourceFile.lengthSync();
 }
 
 List<CopyFailure> _removeSource(ScanResult scanResult) {

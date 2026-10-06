@@ -12,6 +12,13 @@ class ProgressBar {
   final Stopwatch _stopwatch = Stopwatch()..start();
   DateTime _lastRender = DateTime.fromMillisecondsSinceEpoch(0);
 
+  double get _elapsedSeconds => _stopwatch.elapsedMilliseconds / 1000;
+
+  double get _megabytesPerSecond {
+    final double seconds = _elapsedSeconds;
+    return seconds == 0 ? 0 : (bytesDone / (1024 * 1024)) / seconds;
+  }
+
   void addBytes(int bytes) {
     bytesDone += bytes;
     _maybeRender();
@@ -32,33 +39,59 @@ class ProgressBar {
     render();
   }
 
+  double _ratio() {
+    if (totalBytes > 0) {
+      return bytesDone / totalBytes;
+    }
+    return totalFiles == 0 ? 1 : filesDone / totalFiles;
+  }
+
+  String _eta() {
+    final double seconds = _elapsedSeconds;
+    if (seconds < 1 || bytesDone == 0 || bytesDone >= totalBytes) {
+      return '';
+    }
+    final int remaining = ((totalBytes - bytesDone) / (bytesDone / seconds))
+        .round();
+    return ', ETA ${_formatDuration(remaining)}';
+  }
+
   void render() {
     if (!_enabled) {
       return;
     }
-    final double ratio = totalBytes == 0 ? 1 : bytesDone / totalBytes;
+    final double ratio = _ratio();
     final int percent = (ratio * 100).clamp(0, 100).round();
     const int width = 30;
     final int filled = (width * ratio).clamp(0, width).round();
     final String bar = '${'#' * filled}${'-' * (width - filled)}';
-    final double seconds = _stopwatch.elapsedMilliseconds / 1000;
-    final double mbps = seconds == 0
-        ? 0
-        : (bytesDone / (1024 * 1024)) / seconds;
     final String line =
         '[$bar] $percent% '
         '($filesDone/$totalFiles files, '
-        '${_formatBytes(bytesDone)}/${_formatBytes(totalBytes)}, '
-        '${mbps.toStringAsFixed(1)} MB/s)';
+        '${formatBytes(bytesDone)}/${formatBytes(totalBytes)}, '
+        '${_megabytesPerSecond.toStringAsFixed(1)} MB/s${_eta()})';
     stdout.write('\r${_fit(line)}');
   }
 
   void done() {
+    _stopwatch.stop();
     if (!_enabled) {
       return;
     }
     render();
     stdout.write('\n');
+  }
+
+  void interrupt() {
+    if (_enabled) {
+      stdout.write('\n');
+    }
+  }
+
+  String stats() {
+    return '${formatBytes(bytesDone)} in '
+        '${_elapsedSeconds.toStringAsFixed(1)}s, '
+        '${_megabytesPerSecond.toStringAsFixed(1)} MB/s';
   }
 }
 
@@ -79,7 +112,16 @@ int _terminalWidth() {
   }
 }
 
-String _formatBytes(int bytes) {
+String _formatDuration(int totalSeconds) {
+  final int hours = totalSeconds ~/ 3600;
+  final int minutes = (totalSeconds % 3600) ~/ 60;
+  final int seconds = totalSeconds % 60;
+  final String mm = minutes.toString().padLeft(2, '0');
+  final String ss = seconds.toString().padLeft(2, '0');
+  return hours > 0 ? '$hours:$mm:$ss' : '${minutes.toString()}:$ss';
+}
+
+String formatBytes(int bytes) {
   const List<String> units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
   double value = bytes.toDouble();
   int unitIndex = 0;

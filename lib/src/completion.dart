@@ -1,8 +1,12 @@
 import 'dart:io';
 
-const String _bashCompletionPath = '/usr/share/bash-completion/completions';
-const String _zshCompletionPath = '/usr/share/zsh/site-functions';
-const String _fishCompletionPath = '/usr/share/fish/vendor_completions.d';
+const String _bashRoot = '/usr/share/bash-completion';
+const String _zshRoot = '/usr/share/zsh';
+const String _fishRoot = '/usr/share/fish';
+
+const String _bashCompletionPath = '$_bashRoot/completions';
+const String _zshCompletionPath = '$_zshRoot/site-functions';
+const String _fishCompletionPath = '$_fishRoot/vendor_completions.d';
 
 const List<String> _commandNames = <String>['pc', 'pm'];
 
@@ -11,6 +15,8 @@ const List<String> _flags = <String>[
   '--force',
   '-j',
   '--jobs',
+  '-T',
+  '--no-target-directory',
   '-h',
   '--help',
   '--completion',
@@ -51,6 +57,7 @@ const String _zshTemplate = r'''
 _@name@() {
   _arguments \
     '(-f --force)'{-f,--force}'[overwrite destination if it exists]' \
+    '(-T --no-target-directory)'{-T,--no-target-directory}'[treat destination as the exact target path]' \
     '(-j --jobs)'{-j,--jobs}'[number of parallel workers]:jobs:' \
     '(-h --help)'{-h,--help}'[show help]' \
     '--completion[print completion script]:shell:(bash zsh fish)' \
@@ -64,6 +71,7 @@ _@name@ "$@"
 
 const String _fishTemplate = r'''
 complete -c @name@ -s f -l force -d 'overwrite destination if it exists'
+complete -c @name@ -s T -l no-target-directory -d 'treat destination as the exact target path'
 complete -c @name@ -s j -l jobs -x -d 'number of parallel workers'
 complete -c @name@ -s h -l help -d 'show help'
 complete -c @name@ -l completion -x -a 'bash zsh fish' -d 'print completion script'
@@ -93,8 +101,15 @@ String? completionScript(String shell, String commandName) {
 }
 
 class _CompletionFile {
-  _CompletionFile({required this.path, required this.content});
+  _CompletionFile({
+    required this.shell,
+    required this.root,
+    required this.path,
+    required this.content,
+  });
 
+  final String shell;
+  final String root;
   final String path;
   final String content;
 }
@@ -104,18 +119,24 @@ List<_CompletionFile> _completionFiles() {
   for (final String name in _commandNames) {
     files.add(
       _CompletionFile(
+        shell: 'bash',
+        root: _bashRoot,
         path: '$_bashCompletionPath/$name',
         content: _bashScript(),
       ),
     );
     files.add(
       _CompletionFile(
+        shell: 'zsh',
+        root: _zshRoot,
         path: '$_zshCompletionPath/_$name',
         content: _zshScript(name),
       ),
     );
     files.add(
       _CompletionFile(
+        shell: 'fish',
+        root: _fishRoot,
         path: '$_fishCompletionPath/$name.fish',
         content: _fishScript(name),
       ),
@@ -159,24 +180,50 @@ CompletionResult installCompletions() {
   if (!Platform.isLinux) {
     return _unsupportedPlatform();
   }
+  final Set<String> installed = <String>{};
+  final Set<String> skipped = <String>{};
   try {
     for (final _CompletionFile file in _completionFiles()) {
+      if (!Directory(file.root).existsSync()) {
+        skipped.add(file.shell);
+        continue;
+      }
       final File target = File(file.path);
       target.parent.createSync(recursive: true);
       target.writeAsStringSync(file.content);
+      installed.add(file.shell);
     }
-    return CompletionResult(
-      success: true,
-      message:
-          'Installed bash, zsh and fish completions for pc and pm.\n'
-          'Restart your shell to pick them up.\n'
-          'bash needs the bash-completion package; if zsh still does not '
-          'complete, delete ~/.zcompdump* and restart it.',
-      needsSudo: false,
-    );
   } on FileSystemException catch (e) {
     return _writeFailure(e, '--install-completion');
   }
+  skipped.removeAll(installed);
+
+  final StringBuffer message = StringBuffer();
+  if (installed.isEmpty) {
+    message.write('No supported shell found, no completions installed.');
+  } else {
+    message
+      ..writeln('Installed ${installed.join(', ')} completions for pc and pm.')
+      ..write('Restart your shell to pick them up.');
+  }
+  if (skipped.isNotEmpty) {
+    message.write(
+      '\nSkipped ${skipped.join(', ')} (not installed on this system).',
+    );
+  }
+  if (installed.contains('bash')) {
+    message.write('\nbash needs the bash-completion package.');
+  }
+  if (installed.contains('zsh')) {
+    message.write(
+      '\nIf zsh still does not complete, delete ~/.zcompdump* and restart it.',
+    );
+  }
+  return CompletionResult(
+    success: true,
+    message: message.toString(),
+    needsSudo: false,
+  );
 }
 
 CompletionResult uninstallCompletions() {

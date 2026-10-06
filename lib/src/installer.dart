@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'completion.dart';
+import 'fs_utils.dart';
 import 'installer_payload.dart';
 import 'paths.dart';
 import 'permissions.dart';
@@ -77,7 +78,10 @@ Future<void> runInstaller(List<String> args) async {
     return;
   }
 
-  final String binDirectory = joinPaths(installerArgs.prefix, 'bin');
+  final String binDirectory = joinPaths(
+    absolutePath(installerArgs.prefix),
+    'bin',
+  );
   try {
     if (installerArgs.uninstall) {
       _uninstall(binDirectory);
@@ -134,12 +138,17 @@ void _install(String binDirectory) {
 void _installBinary(String directory, String name, List<String> payload) {
   final String target = joinPaths(directory, name);
   final String temporary = '$target.new';
-  final List<int> bytes = gzip.decode(base64Decode(payload.join()));
-  File(temporary).writeAsBytesSync(bytes, flush: true);
-  if (!setPermissions(temporary, _executableMode)) {
-    throw FileSystemException('Could not make file executable', temporary);
+  try {
+    final List<int> bytes = gzip.decode(base64Decode(payload.join()));
+    File(temporary).writeAsBytesSync(bytes, flush: true);
+    if (!setPermissions(temporary, _executableMode)) {
+      throw FileSystemException('Could not make file executable', temporary);
+    }
+    File(temporary).renameSync(target);
+  } on Object {
+    deleteQuietly(temporary);
+    rethrow;
   }
-  File(temporary).renameSync(target);
 }
 
 void _uninstall(String binDirectory) {

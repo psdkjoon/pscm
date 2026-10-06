@@ -1,16 +1,11 @@
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
+import 'fs_utils.dart';
 import 'paths.dart';
 import 'permissions.dart';
 import 'scan.dart';
-
-class WorkerRequest {
-  WorkerRequest({required this.tasks, required this.sendPort});
-
-  final List<FileTask> tasks;
-  final SendPort sendPort;
-}
 
 class WorkerProgress {
   WorkerProgress(this.bytes);
@@ -29,82 +24,104 @@ class WorkerError {
   final String sourcePath;
 }
 
-class WorkerDone {
-  WorkerDone();
+class WorkerBatchDone {
+  WorkerBatchDone();
 }
 
-const int copyBufferSize = 8 * 1024 * 1024;
+const int copyBufferSize = 2 * 1024 * 1024;
 
-void copyWorkerEntry(WorkerRequest request) async {
-  for (final FileTask task in request.tasks) {
-    try {
-      await _copyFile(task, request.sendPort);
-      request.sendPort.send(WorkerFileDone());
-    } on Object catch (e) {
-      request.sendPort.send(WorkerError(e.toString(), task.sourcePath));
+String partPath(String destinationPath) {
+  return joinPaths(
+    dirName(destinationPath),
+    '.${baseName(destinationPath)}.pscm-part',
+  );
+}
+
+Future<void> copyWorkerEntry(SendPort events) async {
+  final ReceivePort commands = ReceivePort();
+  events.send(commands.sendPort);
+  final Uint8List buffer = Uint8List(copyBufferSize);
+
+  await for (final Object? message in commands) {
+    if (message is! List<Object?>) {
+      break;
     }
+    for (final Object? item in message) {
+      final FileTask task = item as FileTask;
+      try {
+        _copy(task, buffer, events);
+        events.send(WorkerFileDone());
+      } on Object catch (e) {
+        events.send(WorkerError(describeError(e), task.sourcePath));
+      }
+    }
+    events.send(WorkerBatchDone());
   }
-  request.sendPort.send(WorkerDone());
+  commands.close();
 }
 
-Future<void> _copyFile(FileTask task, SendPort sendPort) async {
-  final Directory destDir = Directory(dirName(task.destinationPath));
-  if (!destDir.existsSync()) {
-    destDir.createSync(recursive: true);
+void _copy(FileTask task, Uint8List buffer, SendPort events) {
+  final Directory parent = Directory(dirName(task.destinationPath));
+  if (!parent.existsSync()) {
+    parent.createSync(recursive: true);
   }
 
   final String? linkTarget = task.linkTarget;
   if (linkTarget != null) {
-    _clearDestination(task.destinationPath, replaceFiles: true);
-    Link(task.destinationPath).createSync(linkTarget);
+    _placeLink(task.destinationPath, linkTarget);
     return;
   }
 
-  _clearDestination(task.destinationPath, replaceFiles: false);
-
-  final RandomAccessFile input = File(
-    task.sourcePath,
-  ).openSync(mode: FileMode.read);
-  final RandomAccessFile output = File(
-    task.destinationPath,
-  ).openSync(mode: FileMode.write);
-
+  final String part = partPath(task.destinationPath);
+  final RandomAccessFile input = File(task.sourcePath).openSync();
+  bool renamed = false;
   try {
-    while (true) {
-      final List<int> chunk = input.readSync(copyBufferSize);
-      if (chunk.isEmpty) {
-        break;
+    final RandomAccessFile output = File(part).openSync(mode: FileMode.write);
+    try {
+      while (true) {
+        final int read = input.readIntoSync(buffer);
+        if (read == 0) {
+          break;
+        }
+        output.writeFromSync(buffer, 0, read);
+        events.send(WorkerProgress(read));
       }
-      output.writeFromSync(chunk);
-      sendPort.send(WorkerProgress(chunk.length));
+    } finally {
+      output.closeSync();
     }
+    _applyMetadata(task, part);
+    File(part).renameSync(task.destinationPath);
+    renamed = true;
   } finally {
     input.closeSync();
-    output.closeSync();
+    if (!renamed) {
+      deleteQuietly(part);
+    }
   }
-
-  _applyMetadata(task);
 }
 
-void _clearDestination(String path, {required bool replaceFiles}) {
+void _placeLink(String path, String target) {
   final FileSystemEntityType type = FileSystemEntity.typeSync(
     path,
     followLinks: false,
   );
   if (type == FileSystemEntityType.link) {
     Link(path).deleteSync();
-  } else if (replaceFiles && type == FileSystemEntityType.file) {
+  } else if (type == FileSystemEntityType.file) {
     File(path).deleteSync();
   }
+  Link(path).createSync(target);
 }
 
-void _applyMetadata(FileTask task) {
-  setPermissions(task.destinationPath, task.mode);
+void _applyMetadata(FileTask task, String path) {
+  setPermissions(path, task.mode);
   final DateTime? modified = task.modified;
   if (modified == null) {
     return;
   }
   try {
-    File(task.destinationPath).setLastModifiedSync(modified);
-  } on FileSystemException {}
+    File(path).setLastModifiedSync(modified);
+  } on FileSystemException {
+    return;
+  }
 }

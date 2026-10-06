@@ -5,12 +5,22 @@ psdk's smart copy and move CLI tool.
 ## Usage
 
 ```
-pc <source> <destination> [-f|--force] [-j|--jobs N]
-pm <source> <destination> [-f|--force] [-j|--jobs N]
+pc <source> <destination> [-f|--force] [-T] [-j|--jobs N]
+pm <source> <destination> [-f|--force] [-T] [-j|--jobs N]
 ```
 
 Works on files and directories, no `-r` needed. Empty directories, symlinks,
 permissions and modification times are preserved.
+
+If `<destination>` is an existing directory or ends with a slash, the source is
+placed inside it, like `cp` and `mv`. Use `-T` to treat the destination as the
+exact target path instead (for example to merge a directory into an existing
+one with `-f`).
+
+Files are written to a hidden `.name.pscm-part` file and renamed when complete,
+so an interrupted copy never leaves a half-written file under its real name.
+`pm` renames instantly on the same filesystem. Across filesystems it copies,
+verifies, syncs to disk and only then removes the source.
 
 ## Install
 
